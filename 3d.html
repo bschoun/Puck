@@ -1,0 +1,296 @@
+<html>
+    <head>
+        <title>Puck.js Accelerometer streaming in 3D</title>
+    </head>
+    <body style="margin:0px">
+        <script src="https://www.puck-js.com/puck.js"></script>
+        <button id="btnConnect">Connect</button>
+        <button id="btnDisconnect">Disconnect</button>
+        <span>Battery level: <span id="battLevelSpan"></span></span>
+        <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/build/three.min.js"></script>
+        <script src="./www-ahrs.js"></script>
+        
+        <script>
+
+        // Code to upload to Puck.js
+        var PUCK_CODE = `
+
+        // Don't want to use NFR's connect function since we'll already be connected when we upload the code.
+        /*NRF.on('connect', function() {})*/
+
+        Puck.accelOn(104);
+        Puck.magOn(150);
+        digitalPulse(LED2, 1, 500);
+
+        const batteryIntervalId = setInterval(function(){
+            reportBattery()
+        }, 60000)
+            
+        // Turn off the accelerometer and battery reporting when we disconnect. Blink red LED.
+        NRF.on('disconnect', function() {
+            Puck.accelOff();
+            digitalPulse(LED1, 1, 500)
+            clearInterval(batteryIntervalId);
+            Puck.magOff();
+        })
+
+        // Have Puck report battery every 30 seconds
+        function reportBattery(){
+	        var d = [
+	            "B",
+	            Math.round(Puck.getBatteryPercentage()*100)
+	          ];
+            Bluetooth.println(d.join(","));
+        }
+
+        setInterval(function(){
+            reportBattery()
+        }, 60000)
+
+        Puck.on('mag', function(xyz) {
+            var d = [
+                "M",
+                xyz.x,
+                xyz.y,
+                xyz.z
+            ];
+            Bluetooth.println(d.join(","));
+        })
+        Puck.on('accel',function(a) {
+            //console.log(a);
+            var d = [
+                "A",
+                Math.round(a["acc"]["x"]*100),
+                Math.round(a["acc"]["y"]*100),
+                Math.round(a["acc"]["z"]*100),
+                Math.round(a["gyro"]["x"]*100),
+                Math.round(a["gyro"]["y"]*100),
+                Math.round(a["gyro"]["z"]*100)
+            ];
+            Bluetooth.println(d.join(","));
+        })
+        `;
+
+        // Vector3 variables to hold data from accel/gyro/mag/battery
+        var accel = new THREE.Vector3( 0, 0, 0);
+        var gyro = new THREE.Vector3(0, 0, 0);
+        var mag = new THREE.Vector3(0, 0, 0);
+        var linearAccel = new THREE.Vector3(0, 0, 0);
+        var velocity = new THREE.Vector3(0, 0, 0);
+        var position = new THREE.Vector3(0, 0, 0);
+        var battery = 100;
+
+        // Quaternion to hold rotation data
+        var rotation = new THREE.Quaternion(0, 0, 0, 1);
+
+        // Constants 
+        const accelScale = 8192;    // Accel data must be divided by 8192, per this: https://www.espruino.com/Reference#l_Puck_accel
+        const gyroScale = 134;      // Gyro data must be divided by 134, per this: https://www.espruino.com/Reference#l_Puck_accel
+        const magScale = 1;         // Not sure this actually has to be scaled at all
+        const hz = 104;             // Data rate of accel/gyro. Make sure this matches the call to Puck.accelOn() in PUCK_CODE
+        const deltaTime = 1/hz;     // Change in time
+        const gToMps2 = 9.80665;    // Convert g to m/s^2
+        const battLevelSpan = document.getElementById('battLevelSpan');
+
+        // Attitude/heading reference system using Madgwick algorithm. beta can be adjusted lower for smoother movement
+        const madgwick = new AHRS({
+            sampleInterval: hz,
+            algorithm: 'Madgwick',
+            beta: 0.9,
+            doInitialisation: true
+        });
+
+        // When we click the connect button...
+        var connection;
+        document.getElementById("btnDisconnect").addEventListener("click", function() 
+        {
+            // disconnect if connected already
+            if (connection) {
+                connection.close();
+                connection = undefined;
+            }
+        });
+        document.getElementById("btnConnect").addEventListener("click", function() 
+        {
+            // disconnect if connected already
+            if (connection) {
+                connection.close();
+                connection = undefined;
+            }
+            // Connect
+            Puck.connect(function(c) {
+                if (!c) {
+                    alert("Couldn't connect!");
+                    return;
+                }
+                connection = c;
+                // Handle the data we get back, and call 'onLine'
+                // whenever we get a line
+                var buf = "";
+                connection.on("data", function(d) {
+                    buf += d;
+                    var l = buf.split("\n");
+                    buf = l.pop();
+                    l.forEach(onLine);
+                });
+                // First, reset the Puck
+                connection.write("reset();\n", function() {
+                    // Wait for it to reset itself
+                    setTimeout(function() {
+                    // Now upload our code to it
+                    connection.write("\x03\x10if(1){"+PUCK_CODE+"}\n",
+                        function() { console.log("Ready..."); });
+                    }, 1500);
+                });
+            });
+        });
+
+        // When we get a line of data, check it and if it's
+        // from the accelerometer, update it
+        function onLine(line) 
+        {
+            //console.log("RECEIVED:"+line);
+            var d = line.split(",");
+
+            // Battery data
+            if (d.length==2 && d[0]=="B") 
+            {
+	            battery = parseInt(d[1])/100;  
+                battLevelSpan.innerText = battery + "%"
+	            //console.log("BATTERY");
+	            //console.log(battery);
+            }
+
+            // Accelerometer/gyroscope data
+            else if (d.length==7 && d[0]=="A") 
+            {
+                // Accelerometer reading, scaled by accelScale (per Puck.js v2.0 documentation)
+                accel.x = (parseInt(d[1])/100)/accelScale;
+                accel.y = (parseInt(d[2])/100)/accelScale;
+                accel.z = (parseInt(d[3])/100)/accelScale;
+
+                //console.log("ACCEL");
+                //console.log(accel);
+
+                // Gyroscope reading, scaled by gyroScale (per Puck.js v2.0 documentation)
+                gyro.x = degrees_to_radians((parseInt(d[4])/100)/gyroScale);
+                gyro.y = degrees_to_radians((parseInt(d[5])/100)/gyroScale);
+                gyro.z = degrees_to_radians((parseInt(d[6])/100)/gyroScale);
+                //console.log("GYRO");
+                //console.log(gyro);
+
+                // Update the Madgwick filter
+                madgwick.update(gyro.x, gyro.y, gyro.z, accel.x, accel.y, accel.z, mag.y, -mag.x, mag.z, deltaTime);
+                //madgwick.update(gyro.x, gyro.y, gyro.z, accel.x, accel.y, accel.z, 0, 0, 0, deltaTime);
+                //madgwick.update(-1*gyro.y, gyro.x, gyro.z, -1*accel.y, accel.x, accel.z, 0, 0, 0, deltaTime);
+                //madgwick.update(-1*gyro.y, gyro.x, gyro.z, -1*accel.y, accel.x, accel.z, mag.x, mag.y, mag.z, deltaTime);
+  
+                // Get the rotation data
+                var q = madgwick.getQuaternion();
+
+                // Rotation 
+                rotation.x = q.x;
+                rotation.y = q.y;
+                rotation.z = q.z;
+                rotation.w = q.w;
+
+                render();
+            }
+
+            // Magnetometer data (TODO: not currently used)
+            else if (d.length==4 && d[0]=="M") 
+            {
+                mag.x = parseInt(d[1])/magScale; // NOTE: x and y could be flipped per this: https://forum.espruino.com/conversations/389565/, pay attention to the x/y and indices
+                mag.y = parseInt(d[2])/magScale;
+                mag.z = parseInt(d[3])/magScale;
+   
+                //console.log("MAG");
+                //console.log(mag);
+            }
+        }
+
+        // WebGL boilerplate
+        var scene, camera, renderer, cylinder, xdir, ydir, zdir;
+        var WIDTH  = window.innerWidth;
+        var HEIGHT = window.innerHeight;
+
+        // Graphics initialization
+        function init() 
+        {
+            // Three.js has a default up y axis. Set this to z instead to align with the Puck.
+            THREE.Object3D.DefaultUp.set(0.0, 0.0, 1.0);
+            scene = new THREE.Scene();
+
+            // Set up camera
+            camera = new THREE.PerspectiveCamera(100, WIDTH / HEIGHT, 0.1, 200);
+            camera.position.set(10, 10, 5);
+            camera.lookAt(scene.position);
+
+            // Illumination
+            var llum = new THREE.DirectionalLight();
+            llum.intensity=30;
+            llum.position.x=camera.position.x;
+            llum.position.y=camera.position.y;
+            llum.position.z=camera.position.z;
+            llum.lookAt(scene.position);
+            scene.add(llum);
+
+            // Create a puck model with xyz axes using cylinders
+            const geometry = new THREE.CylinderGeometry(5, 5, 1, 32);
+            const material = new THREE.MeshStandardMaterial({ color: 0x000000 });
+            geometry.rotateX(degrees_to_radians(90));
+            cylinder = new THREE.Mesh(geometry, material);
+            
+            // x axis (blue)
+            xdir = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 5, 8), new THREE.MeshStandardMaterial({ color: 0x0000ff }));
+            xdir.translateX(5);
+            xdir.rotateZ(degrees_to_radians(90));
+
+            // y axis (red)
+            ydir = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 5, 8), new THREE.MeshStandardMaterial({ color: 0xff0000 }));
+            ydir.translateY(5);
+            
+            // z axis (green)
+            zdir = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 5, 8), new THREE.MeshStandardMaterial({ color: 0x00ff00 }));
+            zdir.translateZ(2.5);
+            zdir.rotateX(degrees_to_radians(90));
+    
+            // Add axes as children of the cylinder
+            cylinder.add(xdir);
+            cylinder.add(ydir);
+            cylinder.add(zdir);
+
+            // Add the cylinder to the scene
+            scene.add(cylinder);
+
+            // Renderer
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+	        renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.setSize(WIDTH, HEIGHT);
+
+            document.body.appendChild(renderer.domElement);
+        }
+
+        // Converts degrees to radians
+        function degrees_to_radians(degrees)
+        {
+            // Store the value of pi.
+            var pi = Math.PI;
+            // Multiply degrees by pi divided by 180 to convert to radians.
+            return degrees * (pi/180);
+        }
+
+ 
+        // Renders cylinder with rotation from Puck (if connected)
+        function render() 
+        {
+            // Set rotation based on quaternion
+            cylinder.setRotationFromQuaternion(rotation);
+            renderer.render(scene, camera);
+        }
+
+        init();
+        render();
+        </script>
+    </body>
+</html>
