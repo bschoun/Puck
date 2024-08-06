@@ -270,17 +270,6 @@
 
                 render();
             }
-
-            // Magnetometer data (TODO: not currently used)
-            else if (d.length==4 && d[0]=="M") 
-            {
-                mag.x = parseInt(d[1])/magScale; // NOTE: x and y could be flipped per this: https://forum.espruino.com/conversations/389565/, pay attention to the x/y and indices
-                mag.y = parseInt(d[2])/magScale;
-                mag.z = parseInt(d[3])/magScale;
-   
-                //console.log("MAG");
-                //console.log(mag);
-            }
         }
 
         // WebGL boilerplate
@@ -395,19 +384,20 @@
         // Renders cylinder with rotation from Puck (if connected)
         function render() 
         {
-
-            //cylinder.position = cylinder.worldToLocal(position);
             // Set rotation based on quaternion
             cylinder.setRotationFromQuaternion(rotation);
+
+            // Translating based on linearAccel
             cylinder.translateX(linearAccel.x);
             cylinder.translateY(linearAccel.y);
             cylinder.translateZ(linearAccel.z);
             renderer.render(scene, camera);
+
+            // Translating back after render, too much drift
+            // TODO: There's probably a cleaner way to do this but I'm a THREE.js noob
             cylinder.translateZ(-linearAccel.z);
             cylinder.translateY(-linearAccel.y);
             cylinder.translateX(-linearAccel.x);
-            
-            
         }
 
         window.requestAnimationFrame(step);
