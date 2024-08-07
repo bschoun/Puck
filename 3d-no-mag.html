@@ -33,7 +33,6 @@
 
         // Turn the accel/gyro/mag on with specified hz
         Puck.accelOn(${hz});
-        Puck.magOn(${magHz});
 
         // Blink green LED to show we've connected
         digitalPulse(LED2, 1, 500);
@@ -48,7 +47,6 @@
             Puck.accelOff();
             digitalPulse(LED1, 1, 500)
             clearInterval(batteryIntervalId);
-            Puck.magOff();
         })
 
         // Have Puck report battery every 30 seconds
@@ -60,34 +58,6 @@
             Bluetooth.println(d.join(","));
         }
 
-        // We want get a relative measurement from the magnetometer, rather than the raw (absolute?) data
-        // To do that, we subtract the average magnetometer data from the raw mag data (based on this suggestion: https://forum.espruino.com/conversations/398337/)
-        // TODO: I'd like to use Vec3 to clean this up. It works in the Espruino IDE but for some reason not here...
-        Puck.on('mag', function(xyz) {
-
-            if (minMag.x == undefined && minMag.y == undefined && minMag.z == undefined && maxMag.x == undefined && maxMag.y == undefined && maxMag.z == undefined) {
-                minMag.x = xyz.x;
-                minMag.y = xyz.y;
-                minMag.z = xyz.z;
-                maxMag.x = xyz.x;
-                maxMag.y = xyz.y;
-                maxMag.z = xyz.z;
-            }
-            else {
-                minMag.x = Math.min(xyz.x, minMag.x);
-                minMag.y = Math.min(xyz.y, minMag.y);
-                minMag.z = Math.min(xyz.z, minMag.z);
-                maxMag.x = Math.max(xyz.x, maxMag.x);
-                maxMag.y = Math.max(xyz.y, maxMag.y);
-                maxMag.z = Math.max(xyz.z, maxMag.z);
-            }
-
-            // Diff
-            mag.x = xyz.x - (minMag.x + maxMag.x)/2.0;
-            mag.y = xyz.y - (minMag.y + maxMag.y)/2.0;
-            mag.z = xyz.z - (minMag.z + maxMag.z)/2.0;
-        })
-
         // When we get accelerometer/gyro data, report accel/gyro/mag data
         Puck.on('accel',function(a) {
             //console.log(a);
@@ -98,10 +68,7 @@
                 Math.round(a["acc"]["z"]*100),
                 Math.round(a["gyro"]["x"]*100),
                 Math.round(a["gyro"]["y"]*100),
-                Math.round(a["gyro"]["z"]*100),
-                Math.round(mag.x*100), 
-                Math.round(mag.y*100),
-                Math.round(mag.z*100)
+                Math.round(a["gyro"]["z"]*100)
             ];
             Bluetooth.println(d.join(","));
         });
@@ -193,7 +160,7 @@
             }
 
             // Accelerometer/gyroscope data
-            else if (d.length==10 && d[0]=="A") 
+            else if (d.length==7 && d[0]=="A") 
             {
                 // Accelerometer reading, scaled by accelScale (per Puck.js v2.0 documentation)
                 accel.x = (parseInt(d[1])/100)/accelScale;
